@@ -1,4 +1,3 @@
-# 畫布 (Canvas) 工具 README
 
 這是一個提供自訂繪圖與錄製功能的前端工具，主要透過 HTML 的 `<canvas>` 元素在瀏覽器端進行繪製。你可以在此畫布上進行手繪、載入圖片、疊加文字或其他視覺效果，也可以透過 `canvas.captureStream()` 與 `MediaRecorder` 實現錄製、下載等應用。
 
