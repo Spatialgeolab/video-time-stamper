@@ -1,0 +1,313 @@
+<!-- commit: 初始化專案結構，載入 Bootstrap 5 與設定基本頁面結構 -->
+<!DOCTYPE html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="description" content="此範例示範如何在影片中疊加時間戳（yyyy-mm-dd hh:mm:ss）並下載錄製後的影片，使用 setInterval 控制 FPS 並顯示錄製進度條。" />
+    <meta name="keywords" content="影片時間戳, Video Timestamp, 錄製並下載, setInterval, Recording, Progress Bar, Bootstrap 5, JavaScript" />
+    <meta name="robots" content="index, follow" />
+    <title>影片加時間戳</title>
+    <!-- Bootstrap 5 CSS -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet" />
+    <style>
+      /* commit: 新增 overlay 與隱藏 Canvas 的樣式 */
+      #video-container {
+        position: relative;
+        display: inline-block;
+      }
+      #timestamp-overlay {
+        position: absolute;
+        top: 10px;
+        left: 10px;
+        background: rgba(0, 0, 0, 0.5);
+        color: #fff;
+        padding: 5px 10px;
+        border-radius: 3px;
+        font-size: 16px;
+        pointer-events: none;
+      }
+      #recordingCanvas {
+        display: none;
+      }
+    </style>
+  </head>
+  <body class="bg-light">
+    <!-- commit: 建立容器並加入標題 -->
+    <div class="container py-5">
+      <h1 class="mb-4">影片添加時間戳 (setInterval版 + 進度條)</h1>
+
+      <!-- commit: 新增表單區塊 (Bootstrap Form) -->
+      <div class="row mb-3">
+        <div class="col-md-6">
+          <label for="videoInput" class="form-label">上傳影片</label>
+          <input type="file" class="form-control" id="videoInput" accept="video/*" />
+        </div>
+      </div>
+
+      <!-- commit: 參考開始時間輸入與設定按鈕 -->
+      <div class="row mb-3">
+        <div class="col-md-4">
+          <label for="startTimeInput" class="form-label">參考開始時間 (yyyy-mm-dd hh:mm:ss)</label>
+          <input type="text" class="form-control" id="startTimeInput" placeholder="2025-01-01 12:00:00" />
+        </div>
+        <div class="col-md-2 d-flex align-items-end">
+          <button class="btn btn-primary w-100" id="setTimeButton">設定開始時間</button>
+        </div>
+      </div>
+
+      <!-- commit: 選擇錄製的幀率 (FPS) -->
+      <div class="row mb-3">
+        <div class="col-md-3">
+          <label for="fpsSelect" class="form-label">選擇錄製FPS</label>
+          <select class="form-select" id="fpsSelect">
+            <option value="15">15 FPS</option>
+            <option value="24">24 FPS</option>
+            <option value="30" selected>30 FPS</option>
+            <option value="60">60 FPS</option>
+          </select>
+        </div>
+      </div>
+
+      <!-- commit: 顯示影片及疊加的時間戳 -->
+      <div class="row mb-4">
+        <div class="col-md-8">
+          <div id="video-container">
+            <video id="videoPlayer" class="border" controls width="640"></video>
+            <div id="timestamp-overlay">0000-00-00 00:00:00</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- commit: 錄製並下載影片按鈕 -->
+      <div class="row mb-4">
+        <div class="col-md-4 d-flex align-items-center">
+          <button class="btn btn-success w-100" id="recordButton">開始錄製並下載影片</button>
+        </div>
+      </div>
+
+      <!-- commit: 進度條顯示 (Bootstrap Progress) -->
+      <div class="row mb-4">
+        <div class="col-md-6">
+          <label class="form-label">錄製進度</label>
+          <div class="progress" style="height: 24px">
+            <div id="recordProgress" class="progress-bar" role="progressbar" style="width: 0%" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100">0%</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- commit: 隱藏的錄製 Canvas -->
+      <canvas id="recordingCanvas"></canvas>
+    </div>
+
+    <!-- Bootstrap 5 JS (選用，如需互動元件可加上 Popper) -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+
+    <!-- commit: 加入主程式邏輯，處理影片播放、時間戳、以及錄製流程 -->
+    <script>
+      // 取得 DOM 元素
+      const videoInput = document.getElementById("videoInput");
+      const videoPlayer = document.getElementById("videoPlayer");
+      const timestampOverlay = document.getElementById("timestamp-overlay");
+      const startTimeInput = document.getElementById("startTimeInput");
+      const setTimeButton = document.getElementById("setTimeButton");
+      const recordButton = document.getElementById("recordButton");
+      const recordingCanvas = document.getElementById("recordingCanvas");
+      const fpsSelect = document.getElementById("fpsSelect");
+
+      // 進度條元素
+      const recordProgress = document.getElementById("recordProgress");
+
+      // commit: 新增變數來記錄使用者設定的參考開始時間 (Date 物件)
+      let referenceDate = null;
+      let lastDisplayedSecond = -1;
+
+      // commit: 錄製相關變數
+      let mediaRecorder;
+      let recordedChunks = [];
+      let drawInterval = null; // setInterval 的 ID
+
+      // commit: 監聽事件，當上傳影片時設定 videoPlayer 的來源
+      videoInput.addEventListener("change", function (e) {
+        const file = e.target.files[0];
+        if (file) {
+          const fileURL = URL.createObjectURL(file);
+          videoPlayer.src = fileURL;
+          videoPlayer.load();
+        }
+      });
+
+      // commit: 監聽「設定開始時間」按鈕，解析輸入字串為 Date 物件
+      setTimeButton.addEventListener("click", function () {
+        const timeStr = startTimeInput.value.trim();
+        if (timeStr) {
+          const dt = parseDateTime(timeStr);
+          if (dt) {
+            referenceDate = dt;
+            updateTimestampOverlay(0);
+          }
+        }
+      });
+
+      // commit: 監聽影片 timeupdate 事件，更新右上角的 overlay (僅視覺參考)
+      videoPlayer.addEventListener("timeupdate", function () {
+        const currentSec = Math.floor(videoPlayer.currentTime);
+        if (currentSec !== lastDisplayedSecond) {
+          lastDisplayedSecond = currentSec;
+          updateTimestampOverlay(currentSec);
+        }
+      });
+
+      // commit: 更新 overlay 的函式，(參考時間 + 影片當前秒數)
+      function updateTimestampOverlay(currentSec) {
+        if (!referenceDate) return;
+        const newDate = new Date(referenceDate.getTime() + currentSec * 1000);
+        timestampOverlay.textContent = formatDateTime(newDate);
+      }
+
+      // commit: 解析 yyyy-mm-dd hh:mm:ss 成 Date 物件
+      function parseDateTime(timeStr) {
+        const parts = timeStr.split(" ");
+        if (parts.length !== 2) {
+          alert("時間格式錯誤，請使用 yyyy-mm-dd hh:mm:ss 格式");
+          return null;
+        }
+        const datePart = parts[0];
+        const timePart = parts[1];
+        const dateComponents = datePart.split("-");
+        const timeComponents = timePart.split(":");
+        if (dateComponents.length !== 3 || timeComponents.length !== 3) {
+          alert("時間格式錯誤，請使用 yyyy-mm-dd hh:mm:ss 格式");
+          return null;
+        }
+        const year = parseInt(dateComponents[0], 10);
+        const month = parseInt(dateComponents[1], 10) - 1;
+        const day = parseInt(dateComponents[2], 10);
+        const hour = parseInt(timeComponents[0], 10);
+        const minute = parseInt(timeComponents[1], 10);
+        const second = parseInt(timeComponents[2], 10);
+        if (isNaN(year) || isNaN(month) || isNaN(day) || isNaN(hour) || isNaN(minute) || isNaN(second)) {
+          alert("請輸入有效的數字");
+          return null;
+        }
+        return new Date(year, month, day, hour, minute, second);
+      }
+
+      // commit: 將 Date 物件轉成 yyyy-mm-dd hh:mm:ss
+      function formatDateTime(date) {
+        const year = date.getFullYear();
+        const month = String(date.getMonth() + 1).padStart(2, "0");
+        const day = String(date.getDate()).padStart(2, "0");
+        const hour = String(date.getHours()).padStart(2, "0");
+        const minute = String(date.getMinutes()).padStart(2, "0");
+        const second = String(date.getSeconds()).padStart(2, "0");
+        return `${year}-${month}-${day} ${hour}:${minute}:${second}`;
+      }
+
+      // commit: 點擊「開始錄製並下載影片」按鈕，啟動錄製流程
+      recordButton.addEventListener("click", function () {
+        if (!videoPlayer.src) {
+          alert("請先上傳影片");
+          return;
+        }
+        if (!referenceDate) {
+          alert("請先設定參考開始時間");
+          return;
+        }
+
+        // 如果影片還沒 ready，等 metadata 載入後再開始
+        if (videoPlayer.readyState < 2) {
+          videoPlayer.addEventListener("loadedmetadata", startRecording, {
+            once: true,
+          });
+        } else {
+          startRecording();
+        }
+      });
+
+      // commit: 實際開始錄製的函式
+      function startRecording() {
+        // 取得使用者選擇的 FPS
+        const fps = parseInt(fpsSelect.value, 10) || 30;
+
+        // 確保 Canvas 與影片原始解析度一致
+        recordingCanvas.width = videoPlayer.videoWidth;
+        recordingCanvas.height = videoPlayer.videoHeight;
+
+        const ctx = recordingCanvas.getContext("2d");
+        // 若需要更貼近原始像素，可關閉平滑處理
+        ctx.imageSmoothingEnabled = false;
+
+        // 建立 MediaStream，並以選擇的 FPS 嘗試捕捉
+        const canvasStream = recordingCanvas.captureStream(fps);
+        recordedChunks = [];
+
+        // 建立 MediaRecorder，設定一些參數（可依需求調整）
+        const options = {
+          mimeType: "video/webm;codecs=vp9",
+          videoBitsPerSecond: 5000000, // 5 Mbps (可依需求調整)
+        };
+        mediaRecorder = new MediaRecorder(canvasStream, options);
+
+        mediaRecorder.ondataavailable = function (e) {
+          if (e.data && e.data.size > 0) {
+            recordedChunks.push(e.data);
+          }
+        };
+        mediaRecorder.onstop = function () {
+          const blob = new Blob(recordedChunks, { type: "video/webm" });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement("a");
+          a.style.display = "none";
+          a.href = url;
+          a.download = "timestamped_video.webm";
+          document.body.appendChild(a);
+          a.click();
+
+          // 錄製結束後歸零進度條
+          recordProgress.style.width = "0%";
+          recordProgress.textContent = "0%";
+        };
+
+        // 開始錄製
+        mediaRecorder.start();
+
+        // 若影片是暫停狀態則播放
+        if (videoPlayer.paused) {
+          videoPlayer.play();
+        }
+
+        // commit: 使用 setInterval 以固定 FPS 更新 Canvas
+        const intervalTime = 1000 / fps; // 根據所選 FPS 來計算間隔毫秒
+        drawInterval = setInterval(() => {
+          // 如果影片結束了，就停止錄製
+          if (videoPlayer.ended) {
+            clearInterval(drawInterval);
+            mediaRecorder.stop();
+            return;
+          }
+
+          // 將目前影片畫面繪製到 Canvas
+          ctx.drawImage(videoPlayer, 0, 0, recordingCanvas.width, recordingCanvas.height);
+
+          // 計算並繪製時間戳
+          const currentSec = Math.floor(videoPlayer.currentTime);
+          const currentDate = new Date(referenceDate.getTime() + currentSec * 1000);
+          const text = formatDateTime(currentDate);
+
+          ctx.fillStyle = "rgba(0, 0, 0, 0.4)";
+          ctx.fillRect(10, 10, 200, 30);
+          ctx.fillStyle = "#fff";
+          ctx.font = "20px Arial";
+          ctx.fillText(text, 15, 35);
+
+          // commit: 更新進度條（以影片時間為基準）
+          if (videoPlayer.duration) {
+            const progressPercent = (videoPlayer.currentTime / videoPlayer.duration) * 100;
+            recordProgress.style.width = progressPercent + "%";
+            recordProgress.textContent = progressPercent.toFixed(1) + "%";
+          }
+        }, intervalTime);
+      }
+    </script>
+  </body>
+</html>
